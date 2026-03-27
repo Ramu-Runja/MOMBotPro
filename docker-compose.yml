@@ -1,0 +1,71 @@
+version: "3.9"
+
+services:
+
+  # ── SQL Server ──────────────────────────────────────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD:  "${SA_PASSWORD:-MOMBotPro_Dev!2025}"
+      ACCEPT_EULA:  "Y"
+      MSSQL_PID:    "Express"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P $$SA_PASSWORD -Q 'SELECT 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 30s
+
+  # ── Backend API ─────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ConnectionStrings__DefaultConnection: >-
+        Server=sqlserver,1433;Database=MOMBotPro;
+        User Id=sa;Password=${SA_PASSWORD:-MOMBotPro_Dev!2025};
+        TrustServerCertificate=True;
+      Jwt__Key:               "${JWT_KEY}"
+      Jwt__Issuer:            "MOMBotPro"
+      Jwt__Audience:          "MOMBotProClient"
+      Encryption__Key:        "${ENCRYPTION_KEY}"
+      GitHub__ClientId:       "${GITHUB_CLIENT_ID}"
+      GitHub__ClientSecret:   "${GITHUB_CLIENT_SECRET}"
+      GitHub__CallbackUrl:    "${GITHUB_CALLBACK_URL}"
+      Jira__ClientId:         "${JIRA_CLIENT_ID}"
+      Jira__ClientSecret:     "${JIRA_CLIENT_SECRET}"
+      Jira__CallbackUrl:      "${JIRA_CALLBACK_URL}"
+      Google__ClientId:       "${GOOGLE_CLIENT_ID}"
+      Google__ClientSecret:   "${GOOGLE_CLIENT_SECRET}"
+      Google__CallbackUrl:    "${GOOGLE_CALLBACK_URL}"
+      Zoom__ClientId:         "${ZOOM_CLIENT_ID}"
+      Zoom__ClientSecret:     "${ZOOM_CLIENT_SECRET}"
+      Zoom__CallbackUrl:      "${ZOOM_CALLBACK_URL}"
+      Zoom__WebhookSecret:    "${ZOOM_WEBHOOK_SECRET}"
+      OpenAI__ApiKey:         "${OPENAI_API_KEY}"
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - api
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  sqlserver_data:
