@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── CSS variables: dark (default) ── */
+:root {
+  --bg:       #0A0C12;
+  --surface:  #13161F;
+  --surface2: #1c2030;
+  --border:   #252a3d;
+  --txt:      #e8eaf0;
+  --muted:    #7c829a;
+}
+
+/* ── CSS variables: light ── */
+html.light {
+  --bg:       #F5F6FA;
+  --surface:  #FFFFFF;
+  --surface2: #F0F1F5;
+  --border:   rgba(0,0,0,0.08);
+  --txt:      #1A1D2E;
+  --muted:    #6B7280;
+}
+
+@layer base {
+  body {
+    background-color: var(--bg);
+    color: var(--txt);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+  * { box-sizing: border-box; }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: var(--surface); }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Theme-aware utilities using CSS vars */
+  .bg-bg       { background-color: var(--bg) !important; }
+  .bg-surface  { background-color: var(--surface) !important; }
+  .bg-surface2 { background-color: var(--surface2) !important; }
+  .border-border { border-color: var(--border) !important; }
+  .text-txt    { color: var(--txt) !important; }
+  .text-muted  { color: var(--muted) !important; }
+
+  /* Smooth theme transition on all elements */
+  .theme-transition { transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
+
+  /* Animations */
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50%       { transform: translateY(-10px); }
+  }
+  @keyframes orbit {
+    from { transform: rotate(0deg) translateX(var(--orbit-r, 120px)) rotate(0deg); }
+    to   { transform: rotate(360deg) translateX(var(--orbit-r, 120px)) rotate(-360deg); }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(108,99,255,0.4); }
+    50%       { box-shadow: 0 0 20px 8px rgba(108,99,255,0.15); }
+  }
+  @keyframes sun-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  .animate-float        { animation: float 3s ease-in-out infinite; }
+  .animate-pulse-glow   { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-sun-spin     { animation: sun-spin 8s linear infinite; }
+  .animate-slide-in     { animation: slideIn 0.25s ease-out; }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+}

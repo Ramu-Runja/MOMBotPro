@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "MOMBotPro.API": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:63045;http://localhost:63046"
+    }
+  }
+}
