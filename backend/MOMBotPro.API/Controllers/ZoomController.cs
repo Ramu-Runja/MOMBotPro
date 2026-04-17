@@ -200,6 +200,80 @@ public class ZoomController : ControllerBase
         return Ok(meetings);
     }
 
+    // ── POST /api/zoom/create-meeting ───────────────────────────────────
+    [HttpPost("create-meeting")]
+    public async Task<IActionResult> CreateMeeting([FromBody] CreateMeetingRequest req)
+    {
+        var userId = GetUserId();
+        if (userId == null) return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(req.Topic))
+            return BadRequest(new { error = "Topic is required." });
+
+        var integ = await _db.Integrations
+            .FirstOrDefaultAsync(i => i.UserId == userId.Value && i.Type == "Zoom" && i.IsConnected);
+
+        if (integ == null)
+            return BadRequest(new { error = "Zoom not connected. Connect Zoom first." });
+
+        using var http = new HttpClient();
+        http.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", integ.AccessToken);
+        http.DefaultRequestHeaders.Accept.Add(
+            new MediaTypeWithQualityHeaderValue("application/json"));
+
+        var zoomPayload = new
+        {
+            topic      = req.Topic,
+            type       = 2, // scheduled
+            start_time = req.StartTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            duration   = req.Duration,
+            timezone   = "UTC",
+            settings   = new { host_video = true, participant_video = true, waiting_room = false }
+        };
+
+        var res  = await http.PostAsJsonAsync("https://api.zoom.us/v2/users/me/meetings", zoomPayload);
+        var body = await res.Content.ReadAsStringAsync();
+        _logger.LogInformation("Zoom create-meeting {Status}: {Body}",
+            (int)res.StatusCode, body[..Math.Min(500, body.Length)]);
+
+        if (!res.IsSuccessStatusCode)
+            return StatusCode((int)res.StatusCode, new { error = $"Zoom API error: {body}" });
+
+        using var doc     = JsonDocument.Parse(body);
+        var root          = doc.RootElement;
+        var zoomMeetingId = root.TryGetProperty("id",       out var mid)
+                            ? mid.GetInt64().ToString() : Guid.NewGuid().ToString();
+        var joinUrl       = root.TryGetProperty("join_url", out var ju)
+                            ? ju.GetString() ?? "" : "";
+
+        var meeting = new ZoomMeeting
+        {
+            Id            = Guid.NewGuid(),
+            UserId        = userId.Value,
+            ZoomMeetingId = zoomMeetingId,
+            Topic         = req.Topic,
+            StartTime     = req.StartTime.ToUniversalTime(),
+            Duration      = req.Duration,
+            JoinUrl       = joinUrl,
+            Status        = "scheduled",
+            IsRecurring   = false,
+            CreatedAt     = DateTime.UtcNow,
+        };
+        _db.ZoomMeetings.Add(meeting);
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            id        = meeting.Id,
+            topic     = meeting.Topic,
+            startTime = meeting.StartTime,
+            duration  = meeting.Duration,
+            joinUrl   = meeting.JoinUrl,
+            status    = meeting.Status,
+        });
+    }
+
     // ── GET /api/zoom/debug ──────────────────────────────────────────────
     // Calls Zoom API directly and returns raw response for diagnosis.
     [HttpGet("debug")]
@@ -608,3 +682,5 @@ public class ZoomController : ControllerBase
         return Guid.TryParse(claim, out var id) ? id : null;
     }
 }
+
+public record CreateMeetingRequest(string Topic, DateTime StartTime, int Duration = 30);

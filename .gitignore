@@ -361,3 +361,13 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# ── Secrets — NEVER commit these ──────────────────────────────────────────────
+.env
+.env.local
+.env.development
+.env.production
+**/appsettings.json
+**/appsettings.*.json
+!**/appsettings.Example.json
+backend.zip

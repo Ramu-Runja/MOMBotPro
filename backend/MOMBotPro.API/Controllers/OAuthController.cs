@@ -462,7 +462,7 @@ public class OAuthController : ControllerBase
                   $"?response_type=code" +
                   $"&client_id={Uri.EscapeDataString(clientId ?? "")}" +
                   $"&redirect_uri={Uri.EscapeDataString(callback)}" +
-                  $"&scope={Uri.EscapeDataString("meeting:read:list_meetings meeting:read:meeting recording:read:list_recordings recording:read:recording user:read:user")}" +
+                  $"&scope={Uri.EscapeDataString("meeting:read:meeting meeting:read:list_meetings meeting:write:meeting cloud_recording:read:list_user_recordings cloud_recording:read:list_recording_files user:read:user")}" +
                   $"&state={state}";
 
         _logger.LogInformation("Zoom OAuth initiated for user {UserId}", userId);

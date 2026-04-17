@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Bot, Phone, Circle, Settings, CheckCircle2, XCircle,
   Zap, Mic, GitPullRequest, Clock, Calendar, Save,
-  Video, RefreshCw, ExternalLink, AlertCircle,
+  Video, RefreshCw, ExternalLink, AlertCircle, Plus,
 } from "lucide-react";
 import { Card, Button, Input, Spinner, CodeBlock, cn } from "../components/ui";
 import { authFetch } from "../utils/authFetch";
@@ -74,6 +74,12 @@ export default function ZoomJoin() {
   const [meetings,         setMeetings]         = useState([]);
   const [meetingsLoading,  setMeetingsLoading]  = useState(false);
   const [meetingsError,    setMeetingsError]    = useState("");
+  const [scheduleOpen,     setScheduleOpen]     = useState(false);
+  const [schedTopic,       setSchedTopic]       = useState("");
+  const [schedTime,        setSchedTime]        = useState("");
+  const [schedDur,         setSchedDur]         = useState(30);
+  const [scheduling,       setScheduling]       = useState(false);
+  const [schedError,       setSchedError]       = useState("");
 
   const pollRef = useRef(null);
 
@@ -123,11 +129,41 @@ export default function ZoomJoin() {
       const res  = await authFetch(`${API}/zoom/meetings`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load meetings.");
-      setMeetings(data.meetings ?? []);
+      setMeetings(Array.isArray(data) ? data : []);
     } catch (ex) {
       setMeetingsError(ex.message);
     } finally {
       setMeetingsLoading(false);
+    }
+  };
+
+  const scheduleMeeting = async (e) => {
+    e.preventDefault();
+    setSchedError("");
+    if (!schedTopic.trim()) { setSchedError("Topic is required."); return; }
+    if (!schedTime)         { setSchedError("Start time is required."); return; }
+    setScheduling(true);
+    try {
+      const res  = await authFetch(`${API}/zoom/create-meeting`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic:     schedTopic.trim(),
+          startTime: new Date(schedTime).toISOString(),
+          duration:  Number(schedDur),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to schedule meeting.");
+      setScheduleOpen(false);
+      setSchedTopic("");
+      setSchedTime("");
+      setSchedDur(30);
+      await fetchMeetings();
+    } catch (ex) {
+      setSchedError(ex.message);
+    } finally {
+      setScheduling(false);
     }
   };
 
@@ -456,10 +492,16 @@ export default function ZoomJoin() {
               <h2 className="font-display font-bold text-txt text-base">Your Meetings</h2>
               <p className="text-xs text-muted mt-0.5">Live, upcoming, and past Zoom meetings from your account</p>
             </div>
-            <Button variant="secondary" size="sm" onClick={fetchMeetings} disabled={meetingsLoading}>
-              <RefreshCw className={cn("w-4 h-4", meetingsLoading && "animate-spin")} />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" onClick={fetchMeetings} disabled={meetingsLoading}>
+                <RefreshCw className={cn("w-4 h-4", meetingsLoading && "animate-spin")} />
+                Refresh
+              </Button>
+              <Button size="sm" onClick={() => setScheduleOpen(true)}>
+                <Plus className="w-4 h-4" />
+                Schedule
+              </Button>
+            </div>
           </div>
 
           {/* Loading */}
@@ -487,7 +529,7 @@ export default function ZoomJoin() {
             <>
               {/* Live & Upcoming */}
               {(() => {
-                const active = meetings.filter(m => m.status === "live" || m.status === "upcoming");
+                const active = meetings.filter(m => m.status === "scheduled" || m.status === "bot_joining");
                 return active.length > 0 ? (
                   <Card className="p-6">
                     <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-4">Live &amp; Upcoming</p>
@@ -506,7 +548,7 @@ export default function ZoomJoin() {
 
               {/* Recent */}
               {(() => {
-                const past = meetings.filter(m => m.status === "ended");
+                const past = meetings.filter(m => m.status === "ended" || m.status === "cancelled");
                 return past.length > 0 ? (
                   <Card className="p-6">
                     <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-4">Recent</p>
@@ -642,6 +684,93 @@ export default function ZoomJoin() {
       )}
   </div>
 </div>
+
+      {/* ── Schedule Meeting Modal ──────────────────────────────────────── */}
+      {scheduleOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface border border-border rounded-2xl shadow-2xl w-full max-w-md">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-accent" />
+                <span className="font-semibold text-txt text-sm">Schedule a Meeting</span>
+              </div>
+              <button
+                onClick={() => { setScheduleOpen(false); setSchedError(""); }}
+                className="text-muted hover:text-txt transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal body */}
+            <form onSubmit={scheduleMeeting} className="px-6 py-5 space-y-4">
+              {/* Topic */}
+              <div>
+                <label className="block text-xs font-medium text-muted mb-1.5">Meeting Topic</label>
+                <input
+                  type="text"
+                  value={schedTopic}
+                  onChange={e => setSchedTopic(e.target.value)}
+                  placeholder="e.g. Sprint Planning - MOMBotPro"
+                  className="w-full bg-surface2 border border-border rounded-xl px-3 py-2 text-sm text-txt placeholder:text-muted outline-none focus:border-accent transition-colors"
+                />
+              </div>
+
+              {/* Date & Time */}
+              <div>
+                <label className="block text-xs font-medium text-muted mb-1.5">Start Date &amp; Time</label>
+                <input
+                  type="datetime-local"
+                  value={schedTime}
+                  onChange={e => setSchedTime(e.target.value)}
+                  min={new Date().toISOString().slice(0, 16)}
+                  className="w-full bg-surface2 border border-border rounded-xl px-3 py-2 text-sm text-txt outline-none focus:border-accent transition-colors"
+                />
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label className="block text-xs font-medium text-muted mb-1.5">Duration (minutes)</label>
+                <select
+                  value={schedDur}
+                  onChange={e => setSchedDur(Number(e.target.value))}
+                  className="w-full bg-surface2 border border-border rounded-xl px-3 py-2 text-sm text-txt outline-none focus:border-accent transition-colors"
+                >
+                  {[15, 30, 45, 60, 90, 120].map(m => (
+                    <option key={m} value={m}>{m} min</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Error */}
+              {schedError && (
+                <div className="flex items-center gap-2 bg-red/10 border border-red/20 rounded-xl px-4 py-3">
+                  <XCircle className="w-4 h-4 text-red shrink-0" />
+                  <p className="text-xs text-red">{schedError}</p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-3 pt-1">
+                <Button type="submit" className="flex-1 justify-center" disabled={scheduling}>
+                  {scheduling
+                    ? <><Spinner size="sm" /> Scheduling...</>
+                    : <><Calendar className="w-4 h-4" /> Schedule Meeting</>
+                  }
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => { setScheduleOpen(false); setSchedError(""); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -649,9 +778,10 @@ export default function ZoomJoin() {
 // ─── MeetingRow sub-component ────────────────────────────────────────────────
 
 const STATUS_BADGE = {
-  live:     { label: "Live",     cls: "bg-red/10 text-red border border-red/20"         },
-  upcoming: { label: "Upcoming", cls: "bg-accent/10 text-accent border border-accent/20" },
-  ended:    { label: "Ended",    cls: "bg-surface2 text-muted border border-border"      },
+  scheduled:   { label: "Upcoming",    cls: "bg-accent/10 text-accent border border-accent/20"   },
+  bot_joining: { label: "Bot joining", cls: "bg-orange/10 text-orange border border-orange/20"   },
+  ended:       { label: "Ended",       cls: "bg-surface2 text-muted border border-border"        },
+  cancelled:   { label: "Cancelled",   cls: "bg-red/10 text-red border border-red/20"            },
 };
 
 function MeetingRow({ meeting, onJoin, onNavigate }) {
@@ -681,9 +811,9 @@ function MeetingRow({ meeting, onJoin, onNavigate }) {
       </span>
 
       {/* Action */}
-      {meeting.status === "live" || meeting.status === "upcoming" ? (
-        <Button size="sm" variant="secondary" onClick={onJoin}>
-          <Bot className="w-3.5 h-3.5" /> Join
+      {meeting.status === "scheduled" || meeting.status === "bot_joining" ? (
+        <Button size="sm" variant="secondary" onClick={onJoin} disabled={!meeting.joinUrl}>
+          <Bot className="w-3.5 h-3.5" /> Send Bot
         </Button>
       ) : meeting.pipelineId ? (
         <Button size="sm" variant="ghost" onClick={onNavigate}>
