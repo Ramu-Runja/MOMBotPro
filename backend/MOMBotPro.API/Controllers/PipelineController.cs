@@ -11,15 +11,21 @@ namespace MOMBotPro.API.Controllers;
 [Authorize]
 public class PipelineController : ControllerBase
 {
-    private readonly PipelineRepository  _repo;
-    private readonly RecallService       _recall;
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly PipelineRepository         _repo;
+    private readonly RecallService              _recall;
+    private readonly IServiceScopeFactory       _scopeFactory;
+    private readonly PipelineCancellationService _cancellation;
 
-    public PipelineController(PipelineRepository repo, RecallService recall, IServiceScopeFactory scopeFactory)
+    public PipelineController(
+        PipelineRepository          repo,
+        RecallService               recall,
+        IServiceScopeFactory        scopeFactory,
+        PipelineCancellationService cancellation)
     {
         _repo         = repo;
         _recall       = recall;
         _scopeFactory = scopeFactory;
+        _cancellation = cancellation;
     }
 
     // GET /api/pipeline — list all
@@ -53,12 +59,21 @@ public class PipelineController : ControllerBase
         var capturedTranscript = transcript;
         var capturedClient     = request.ClientName;
         var capturedUserId     = userId;
+        var ct                 = _cancellation.Register(capturedId);
 
         _ = Task.Run(async () =>
         {
-            using var scope = _scopeFactory.CreateScope();
-            var orchestrator = scope.ServiceProvider.GetRequiredService<PipelineOrchestrator>();
-            await orchestrator.RunAsync(capturedId, capturedTranscript, capturedClient, userId: capturedUserId);
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetRequiredService<PipelineOrchestrator>();
+                await orchestrator.RunAsync(capturedId, capturedTranscript, capturedClient,
+                    userId: capturedUserId, cancellationToken: ct);
+            }
+            finally
+            {
+                _cancellation.Remove(capturedId);
+            }
         });
 
         return Ok(new { pipelineId = pipeline.Id, status = "Running", message = "Pipeline started" });
@@ -86,6 +101,70 @@ public class PipelineController : ControllerBase
         {
             return StatusCode(500, new { error = ex.Message });
         }
+    }
+
+    // POST /api/pipeline/{id}/stop — cancel a running pipeline
+    [HttpPost("{id}/stop")]
+    public IActionResult Stop(string id)
+    {
+        var pipeline = _repo.Get(id);
+        if (pipeline == null) return NotFound();
+
+        if (pipeline.Status is not (PipelineStatus.Running or PipelineStatus.Pending))
+            return BadRequest(new { error = "Pipeline is not running." });
+
+        _cancellation.Cancel(id);
+
+        // Mark any Running/Waiting steps as Failed immediately in DB
+        foreach (var step in pipeline.Steps.Where(s =>
+            s.Status == StepStatus.Running || s.Status == StepStatus.Waiting))
+        {
+            step.Status      = StepStatus.Failed;
+            step.Message     = "Stopped by user";
+            step.CompletedAt = DateTime.UtcNow;
+            _repo.UpdateStep(id, step.Name, StepStatus.Failed, "Stopped by user");
+        }
+        pipeline.Status = PipelineStatus.Failed;
+        _repo.Save(pipeline);
+
+        return Ok(new { message = "Pipeline stopped." });
+    }
+
+    // POST /api/pipeline/{id}/rerun — re-run a failed pipeline with the same inputs
+    [HttpPost("{id}/rerun")]
+    public IActionResult Rerun(string id)
+    {
+        var original = _repo.Get(id);
+        if (original == null) return NotFound();
+
+        var transcript = original.Transcript
+            ?? "Client reported an issue. Please re-check the recording.";
+        var userId   = GetUserId();
+        var pipeline = _repo.Create(original.ClientName, userId);
+
+        var capturedId         = pipeline.Id;
+        var capturedTranscript = transcript;
+        var capturedClient     = original.ClientName;
+        var capturedUserId     = userId;
+        var capturedBotId      = original.BotId;
+        var ct                 = _cancellation.Register(capturedId);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var orchestrator = scope.ServiceProvider.GetRequiredService<PipelineOrchestrator>();
+                await orchestrator.RunAsync(capturedId, capturedTranscript, capturedClient,
+                    botId: capturedBotId, userId: capturedUserId, cancellationToken: ct);
+            }
+            finally
+            {
+                _cancellation.Remove(capturedId);
+            }
+        });
+
+        return Ok(new { pipelineId = pipeline.Id, status = "Running", message = "Pipeline re-run started." });
     }
 
     // GET /api/pipeline/debug/recall/{botId}

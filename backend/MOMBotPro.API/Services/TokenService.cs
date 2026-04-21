@@ -12,6 +12,25 @@ public class TokenService
 
     public TokenService(IConfiguration config) => _config = config;
 
+    public ClaimsPrincipal? ValidateToken(string token)
+    {
+        try
+        {
+            var key = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(_config["Jwt:Key"] ?? "MOMBotProSuperSecretKey2025!@#$%"));
+            var handler = new JwtSecurityTokenHandler();
+            return handler.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey         = key,
+                ValidateIssuer           = false,
+                ValidateAudience         = false,
+                ClockSkew                = TimeSpan.Zero
+            }, out _);
+        }
+        catch { return null; }
+    }
+
     public string Generate(AppUser user)
     {
         var key = new SymmetricSecurityKey(

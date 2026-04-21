@@ -416,7 +416,7 @@ export default function Analytics() {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border">
+              <tbody className="divide-y divide-border/10">
                 {data.recentPipelines.map((p) => (
                   <tr key={p.id} className="hover:bg-surface2 transition-colors">
                     <td className="px-5 py-3.5 font-semibold text-txt whitespace-nowrap">{p.clientName}</td>

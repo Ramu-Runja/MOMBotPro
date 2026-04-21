@@ -55,7 +55,7 @@ function AboutPanel({ open, onClose }) {
         "transition-transform duration-300 ease-out flex flex-col",
         open ? "translate-x-0" : "translate-x-full"
       )}>
-        <div className="flex items-center justify-between px-6 py-5 border-b border-border">
+        <div className="flex items-center justify-between px-6 py-5 border-b-0">
           <h2 className="font-display font-bold text-txt text-lg">About MOMBot Pro</h2>
           <button onClick={onClose} className="text-muted hover:text-txt transition-colors">
             <X className="w-5 h-5" />
@@ -148,7 +148,7 @@ export default function Layout({ children }) {
 
       {/* ── Sidebar ─────────────────────────────────────── */}
       <aside className={cn(
-        "bg-surface border-r border-border flex flex-col shrink-0 transition-all duration-300 ease-out",
+        "bg-surface border-r-0 flex flex-col shrink-0 transition-all duration-300 ease-out",
         sidebarW
       )}>
         {/* Logo */}
@@ -198,7 +198,7 @@ export default function Layout({ children }) {
                     "relative z-10 flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors",
                     active
                       ? "text-white dark:text-accent border border-transparent"
-                      : "text-muted hover:text-txt hover:bg-surface2 border border-transparent"
+                      : "text-muted hover:text-txt hover:bg-surface2/60 border border-transparent"
                   )}
                 >
                   <Icon className="w-4 h-4 shrink-0" />
@@ -219,9 +219,9 @@ export default function Layout({ children }) {
         {/* Top Navbar */}
 <header className={cn(
   "backdrop-blur border-b px-6 py-4 flex items-center justify-between theme-transition",
-  dark
-    ? "bg-[#0B0F19] border-border"
-    : "bg-white border-gray-200"
+ dark
+  ? "bg-bg border-border/10"
+  : "bg-bg border-border/10"
 )}>
   {/* LEFT: Dynamic Title */}
   <div>

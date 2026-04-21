@@ -71,11 +71,12 @@ public class PipelineOrchestrator
     }
 
     public async Task RunAsync(
-        string  pipelineId,
-        string  transcript,
-        string  clientName,
-        string? botId  = null,
-        Guid?   userId = null)
+        string            pipelineId,
+        string            transcript,
+        string            clientName,
+        string?           botId             = null,
+        Guid?             userId            = null,
+        CancellationToken cancellationToken = default)
     {
         var pipeline = _repo.Get(pipelineId);
         if (pipeline == null) return;
@@ -188,6 +189,8 @@ public class PipelineOrchestrator
                     $"Transcript ready. {transcript.Length} characters.");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             // ── STEP 2: Extract MOM + Bug (OpenAI) ───────────────────────
             using (var activity = _activitySource.StartActivity("Extract Bug from MOM"))
             {
@@ -203,6 +206,8 @@ public class PipelineOrchestrator
                     "Bug: " + bugSummary[..Math.Min(bugSummary.Length, 80)] + "...");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             // ── STEP 3: Create Jira Ticket ────────────────────────────────
             using (var activity = _activitySource.StartActivity("Create Jira Ticket"))
             {
@@ -215,6 +220,8 @@ public class PipelineOrchestrator
                 ApplyStep(pipeline, pipelineId, "Create Jira Ticket", StepStatus.Done,
                     $"Ticket created: {ticket.Key}");
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // ── STEP 4: Scan Codebase ─────────────────────────────────────
             using (var activity = _activitySource.StartActivity("Scan Codebase"))
@@ -230,6 +237,8 @@ public class PipelineOrchestrator
                     $"Bug found in: {analysis.FileName} at line {analysis.LineNumber}");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             // ── STEP 5: Generate Fix ──────────────────────────────────────
             using (var activity = _activitySource.StartActivity("Generate Fix"))
             {
@@ -241,6 +250,8 @@ public class PipelineOrchestrator
                 ApplyStep(pipeline, pipelineId, "Generate Fix", StepStatus.Done,
                     $"Fix ready for {analysis.FileName}");
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // ── STEP 6: Create Branch from default branch & Raise PR → Uat1 ──
             using (var activity = _activitySource.StartActivity("Create Branch & Raise PR"))
@@ -280,6 +291,21 @@ public class PipelineOrchestrator
             await SendPREmail(clientName, ticket, analysis, pipeline.GitHubResult!, uid);
 
             pipeline.Status = PipelineStatus.Done;
+            _repo.Save(pipeline);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("Pipeline {Id} was stopped by user.", pipelineId);
+            pipeline.Status = PipelineStatus.Failed;
+
+            var running = pipeline.Steps.FirstOrDefault(s => s.Status == StepStatus.Running);
+            if (running != null)
+            {
+                running.Status      = StepStatus.Failed;
+                running.Message     = "Stopped by user";
+                running.CompletedAt = DateTime.UtcNow;
+                _repo.UpdateStep(pipelineId, running.Name, StepStatus.Failed, "Stopped by user");
+            }
             _repo.Save(pipeline);
         }
         catch (Exception ex)

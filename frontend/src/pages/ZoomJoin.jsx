@@ -267,7 +267,7 @@ export default function ZoomJoin() {
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6"  >
 
       {/* ── Tab bar ──────────────────────────────────────────────────────── */}
       <div className="relative flex bg-surface2 border border-border rounded-xl p-1">
@@ -294,10 +294,10 @@ export default function ZoomJoin() {
           </button>
         ))}
       </div>
-<div className="relative">
-  <div key={activeTab}
-  className="transition-all duration-300 ease-in-out animate-fade">
-    {/* ════════════════════════════════════════════════════════════════════
+     <div className="relative">
+      <div key={activeTab}
+      className="transition-all duration-300 ease-in-out animate-fade">
+      {/* ════════════════════════════════════════════════════════════════════
           JOIN TAB
       ════════════════════════════════════════════════════════════════════ */}
       {activeTab === "join" && (
@@ -533,7 +533,7 @@ export default function ZoomJoin() {
                 return active.length > 0 ? (
                   <Card className="p-6">
                     <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-4">Live &amp; Upcoming</p>
-                    <div className="divide-y divide-border">
+                    <div className="divide-y divide-border/10">
                       {active.map(meeting => (
                         <MeetingRow
                           key={meeting.id}

@@ -89,7 +89,7 @@ export default function Dashboard() {
     },
     {
       icon:   <TrendingUp className="w-[18px] h-[18px]" />,
-      value:  stats ? `${stats.successRate}%` : "—",
+      value:  stats ? `${stats.momSuccessRate ?? stats.prSuccessRate ?? 0}%` : "—",
       label:  "Success Rate",
       change: stats ? "Based on last 30 days" : "No data yet",
       up:     true,
@@ -157,7 +157,7 @@ export default function Dashboard() {
                 key={p.id ?? i}
                 className={cn(
                   "grid grid-cols-1 md:grid-cols-[1fr_130px_140px_70px_70px_110px] py-3.5 gap-1 md:gap-0 items-center",
-                  i < pipes.length - 1 && "border-b border-border/40"
+                  i < pipes.length - 1 && "border-b border-border/10"
                 )}
               >
                 {/* Name */}

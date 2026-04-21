@@ -234,7 +234,7 @@ function ZoomMeetingsSection({ connected }) {
           <p className="text-xs text-muted mt-1">Click "Sync now" to fetch your Zoom calendar.</p>
         </div>
       ) : (
-        <div className="divide-y divide-border">
+        <div className="divide-y divide-border/10">
           {meetings.map((m) => (
             <div key={m.id} className="flex items-center gap-4 px-6 py-3.5">
               <div className="flex-1 min-w-0">

@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Mic, Bug, Ticket, Search, Wrench, GitPullRequest,
   CheckCircle2, XCircle, Clock, FileCode, MapPin, ExternalLink,
-  Music, Download, RefreshCw, AlertTriangle, VideoOff,
+  Music, Download, RefreshCw, AlertTriangle, VideoOff, Square, RotateCcw,
 } from "lucide-react";
 import { Card, Badge, Tabs, Spinner, Button, CodeBlock, cn } from "../components/ui";
 import { authFetch } from "../utils/authFetch";
@@ -79,6 +79,8 @@ export default function PipelineDetail() {
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
   const [refreshing, setRefreshing]     = useState(false);
   const [refreshError, setRefreshError] = useState("");
+  const [stopping, setStopping]         = useState(false);
+  const [rerunning, setRerunning]       = useState(false);
 
   const audioRef      = useRef(null);
   const activeLineRef = useRef(null);
@@ -191,6 +193,34 @@ export default function PipelineDetail() {
     }
   };
 
+  const handleStop = async () => {
+    setStopping(true);
+    try {
+      const res = await authFetch(`${API}/pipeline/${id}/stop`, { method: "POST" });
+      if (res.ok) {
+        const updated = await authFetch(`${API}/pipeline/${id}`);
+        setPipeline(normalizePipeline(await updated.json()));
+      }
+    } catch (e) {
+      console.error("Stop failed:", e);
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  const handleRerun = async () => {
+    setRerunning(true);
+    try {
+      const res  = await authFetch(`${API}/pipeline/${id}/rerun`, { method: "POST" });
+      const data = await res.json();
+      if (data.pipelineId) navigate(`/pipelines/${data.pipelineId}`);
+    } catch (e) {
+      console.error("Re-run failed:", e);
+    } finally {
+      setRerunning(false);
+    }
+  };
+
 
   return (
     <>
@@ -216,6 +246,18 @@ export default function PipelineDetail() {
             </div>
             <p className="text-xs text-muted mt-0.5">{new Date(pipeline.createdAt).toLocaleString("en-IN")}</p>
           </div>
+          {isLive && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleStop}
+              disabled={stopping}
+              className="text-red hover:text-red hover:bg-red/10 border border-red/30"
+            >
+              <Square className="w-3.5 h-3.5" />
+              {stopping ? "Stopping..." : "Stop"}
+            </Button>
+          )}
         </div>
 
         {/* ── Failed pipeline banner ──────────────────────────── */}
@@ -224,7 +266,7 @@ export default function PipelineDetail() {
             <AlertTriangle className="w-5 h-5 text-red shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-red mb-2">Pipeline Failed</p>
-              <ul className="space-y-1">
+              <ul className="space-y-1 mb-3">
                 {pipeline.steps
                   .filter(s => s.status === "Failed" && s.message)
                   .map((s, i) => (
@@ -233,6 +275,16 @@ export default function PipelineDetail() {
                     </li>
                   ))}
               </ul>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRerun}
+                disabled={rerunning}
+              >
+                {rerunning
+                  ? <><Spinner size="sm" /> Starting...</>
+                  : <><RotateCcw className="w-3.5 h-3.5" /> Re-run Pipeline</>}
+              </Button>
             </div>
           </div>
         )}

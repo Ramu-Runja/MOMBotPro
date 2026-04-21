@@ -90,7 +90,7 @@ export default function PipelineDashboard() {
             <p className="text-xs text-muted mt-1">Start a run from the sidebar</p>
           </div>
         ) : (
-          <div className="divide-y divide-border">
+          <div className="divide-y divide-border/10">
             {pipelines.map((p) => {
               const doneCount = p.steps.filter(s => s.status === "Done").length;
               return (

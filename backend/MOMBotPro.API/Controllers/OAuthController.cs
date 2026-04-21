@@ -21,6 +21,7 @@ public class OAuthController : ControllerBase
     private readonly IHttpClientFactory       _httpFactory;
     private readonly ILogger<OAuthController> _logger;
     private readonly ZoomSyncService          _zoomSync;
+    private readonly TokenService             _tokenService;
 
     private const string FrontendBase = "http://localhost:3000/integrations";
 
@@ -29,13 +30,15 @@ public class OAuthController : ControllerBase
         IConfiguration           config,
         IHttpClientFactory       httpFactory,
         ILogger<OAuthController> logger,
-        ZoomSyncService          zoomSync)
+        ZoomSyncService          zoomSync,
+        TokenService             tokenService)
     {
-        _db          = db;
-        _config      = config;
-        _httpFactory = httpFactory;
-        _logger      = logger;
-        _zoomSync    = zoomSync;
+        _db           = db;
+        _config       = config;
+        _httpFactory  = httpFactory;
+        _logger       = logger;
+        _zoomSync     = zoomSync;
+        _tokenService = tokenService;
     }
 
     // ══════════════════════════════════════════════════════════
@@ -444,52 +447,55 @@ public class OAuthController : ControllerBase
     }
 
     // ══════════════════════════════════════════════════════════
-    // ZOOM  (state-only CSRF — Zoom does not support PKCE)
+    // ZOOM  (JWT-as-state — avoids DB state lookup failures)
     // ══════════════════════════════════════════════════════════
 
-    [Authorize]
+    [AllowAnonymous]
     [HttpGet("zoom/auth")]
-    public async Task<IActionResult> ZoomAuth()
+    public IActionResult ZoomAuth([FromQuery] string? token = null)
     {
-        var userId = GetUserId();
-        if (userId == null) return Unauthorized();
+        var clientId    = _config["Zoom:ClientId"]    ?? "";
+        var redirectUri = _config["Zoom:CallbackUrl"] ?? CallbackUrl("zoom");
 
-        var state    = await PersistStateAsync("zoom", userId.Value, codeVerifier: null);
-        var clientId = _config["Zoom:ClientId"];
-        var callback = _config["Zoom:CallbackUrl"] ?? CallbackUrl("zoom");
+        // Pass the JWT through state so ZoomCallback can identify the user
+        // without needing a DB round-trip for state validation.
+        var state = string.IsNullOrEmpty(token) ? Guid.NewGuid().ToString() : token;
+
+        var scopes = Uri.EscapeDataString(
+            "meeting:read:meeting meeting:read:list_meetings meeting:write:meeting " +
+            "cloud_recording:read:list_user_recordings " +
+            "cloud_recording:read:list_recording_files user:read:user");
 
         var url = "https://zoom.us/oauth/authorize" +
                   $"?response_type=code" +
-                  $"&client_id={Uri.EscapeDataString(clientId ?? "")}" +
-                  $"&redirect_uri={Uri.EscapeDataString(callback)}" +
-                  $"&scope={Uri.EscapeDataString("meeting:read:meeting meeting:read:list_meetings meeting:write:meeting cloud_recording:read:list_user_recordings cloud_recording:read:list_recording_files user:read:user")}" +
-                  $"&state={state}";
+                  $"&client_id={Uri.EscapeDataString(clientId)}" +
+                  $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
+                  $"&scope={scopes}" +
+                  $"&state={Uri.EscapeDataString(state)}";
 
-        _logger.LogInformation("Zoom OAuth initiated for user {UserId}", userId);
+        _logger.LogInformation("Zoom OAuth start → {Url}", url[..Math.Min(200, url.Length)]);
         return Redirect(url);
     }
 
+    [AllowAnonymous]
     [HttpGet("zoom/callback")]
     public async Task<IActionResult> ZoomCallback(
-        [FromQuery] string? code, [FromQuery] string? state)
+        [FromQuery] string? code  = null,
+        [FromQuery] string? state = null,
+        [FromQuery] string? error = null)
     {
-        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
-            return BadRequest("Missing code or state.");
+        if (!string.IsNullOrEmpty(error))
+            return Redirect($"{FrontendBase}?error=zoom_{error}");
 
-        var (userId, _, stateError) = await ConsumeStateAsync(state, "zoom");
-        if (stateError != null)
-        {
-            _logger.LogWarning("Zoom state validation failed: {Err}", stateError);
-            return BadRequest($"OAuth state error: {stateError}");
-        }
+        if (string.IsNullOrEmpty(code))
+            return Redirect($"{FrontendBase}?error=zoom_no_code");
 
         try
         {
             var clientId     = _config["Zoom:ClientId"]     ?? "";
             var clientSecret = _config["Zoom:ClientSecret"] ?? "";
-            var callback     = _config["Zoom:CallbackUrl"]  ?? CallbackUrl("zoom");
+            var redirectUri  = _config["Zoom:CallbackUrl"]  ?? CallbackUrl("zoom");
 
-            // Zoom uses HTTP Basic auth for token exchange (not JSON body)
             var credentials = Convert.ToBase64String(
                 Encoding.UTF8.GetBytes($"{clientId}:{clientSecret}"));
 
@@ -497,36 +503,49 @@ public class OAuthController : ControllerBase
             http.DefaultRequestHeaders.Authorization =
                 new AuthenticationHeaderValue("Basic", credentials);
 
-            var form = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"]   = "authorization_code",
-                ["code"]         = code,
-                ["redirect_uri"] = callback,
-            });
+            var tokenRes = await http.PostAsync(
+                "https://zoom.us/oauth/token",
+                new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["grant_type"]   = "authorization_code",
+                    ["code"]         = code,
+                    ["redirect_uri"] = redirectUri,
+                }));
 
-            var tokenRes = await http.PostAsync("https://zoom.us/oauth/token", form);
             var tokenRaw = await tokenRes.Content.ReadAsStringAsync();
-            _logger.LogDebug("Zoom token response: {Raw}", tokenRaw);
+            _logger.LogInformation("Zoom token exchange {Status}: {Raw}",
+                (int)tokenRes.StatusCode, tokenRaw[..Math.Min(300, tokenRaw.Length)]);
 
-            using var tokenDoc = JsonDocument.Parse(tokenRaw);
-            var accessToken    = tokenDoc.RootElement.GetProperty("access_token").GetString();
-            var refreshToken   = tokenDoc.RootElement.TryGetProperty("refresh_token", out var rt)
-                                 ? rt.GetString() : null;
-
-            if (string.IsNullOrEmpty(accessToken))
+            if (!tokenRes.IsSuccessStatusCode)
             {
-                _logger.LogError("Zoom token exchange failed. Raw: {Raw}", tokenRaw);
-                return Redirect($"{FrontendBase}?error=zoom_token_failed");
+                _logger.LogError("Zoom token exchange failed {Status}. Raw: {Raw}",
+                    (int)tokenRes.StatusCode, tokenRaw);
+
+                // Surface Zoom's reason so we can diagnose from the browser URL
+                string zoomReason = "unknown";
+                try
+                {
+                    using var errDoc = JsonDocument.Parse(tokenRaw);
+                    zoomReason = errDoc.RootElement.TryGetProperty("reason", out var r)  ? r.GetString() ?? "unknown"
+                               : errDoc.RootElement.TryGetProperty("error",  out var e)  ? e.GetString() ?? "unknown"
+                               : "unknown";
+                }
+                catch { /* non-JSON error body */ }
+
+                return Redirect($"{FrontendBase}?error=zoom_token_failed&reason={Uri.EscapeDataString(zoomReason)}&status={(int)tokenRes.StatusCode}");
             }
 
-            // Save token first — so a failed /me call can't block the access token from being stored
-            await SaveIntegrationAsync(userId!.Value, "Zoom", integ =>
-            {
-                integ.AccessToken = accessToken;
-                integ.ConfigJson  = JsonSerializer.Serialize(new { refresh_token = refreshToken ?? "" });
-            });
+            using var tokenDoc  = JsonDocument.Parse(tokenRaw);
+            var accessToken     = tokenDoc.RootElement.GetProperty("access_token").GetString() ?? "";
+            var refreshToken    = tokenDoc.RootElement.TryGetProperty("refresh_token", out var rt)
+                                  ? rt.GetString() ?? "" : "";
+            var expiresIn       = tokenDoc.RootElement.TryGetProperty("expires_in", out var ei)
+                                  ? ei.GetInt32() : 3600;
+            var scope           = tokenDoc.RootElement.TryGetProperty("scope", out var sc)
+                                  ? sc.GetString() ?? "" : "";
+            var expiresAt       = DateTime.UtcNow.AddSeconds(expiresIn - 60);
 
-            // Fetch Zoom user profile for email + Zoom user ID (best-effort — non-fatal)
+            // Fetch Zoom user profile for email + Zoom user ID (best-effort)
             string? email  = null;
             string? zoomId = null;
             try
@@ -539,7 +558,7 @@ public class OAuthController : ControllerBase
 
                 var meRes = await meClient.GetAsync("https://api.zoom.us/v2/users/me");
                 var meRaw = await meRes.Content.ReadAsStringAsync();
-                _logger.LogInformation("Zoom /me response {Status}: {Raw}",
+                _logger.LogInformation("Zoom /me {Status}: {Raw}",
                     (int)meRes.StatusCode, meRaw[..Math.Min(300, meRaw.Length)]);
 
                 if (meRes.IsSuccessStatusCode)
@@ -547,27 +566,58 @@ public class OAuthController : ControllerBase
                     using var meDoc = JsonDocument.Parse(meRaw);
                     email  = meDoc.RootElement.TryGetProperty("email", out var em) ? em.GetString() : null;
                     zoomId = meDoc.RootElement.TryGetProperty("id",    out var id) ? id.GetString() : null;
-
-                    if (email != null || zoomId != null)
-                    {
-                        await SaveIntegrationAsync(userId!.Value, "Zoom", integ =>
-                        {
-                            if (email  != null) integ.Email = email;
-                            if (zoomId != null) integ.Owner = zoomId; // Zoom user ID — used for webhook routing
-                        });
-                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Zoom /me profile fetch failed — token saved, email/owner not set");
+                _logger.LogWarning(ex, "Zoom /me fetch failed — proceeding without email/zoomId");
             }
 
+            // Resolve userId from the JWT we passed as state
+            Guid? userId = null;
+            if (!string.IsNullOrEmpty(state))
+            {
+                try
+                {
+                    var principal = _tokenService.ValidateToken(state);
+                    var idClaim   = principal?.FindFirst(ClaimTypes.NameIdentifier)
+                                 ?? principal?.FindFirst("sub");
+                    if (idClaim != null && Guid.TryParse(idClaim.Value, out var parsedId))
+                        userId = parsedId;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not parse userId from state JWT");
+                }
+            }
+
+            if (userId == null)
+            {
+                _logger.LogError("Zoom callback: no userId resolved from state — aborting");
+                return Redirect($"{FrontendBase}?error=zoom_callback_failed");
+            }
+
+            var configJson = JsonSerializer.Serialize(new
+            {
+                refresh_token = refreshToken,
+                expiresAt     = expiresAt.ToString("o"),
+                scope
+            });
+
+            await SaveIntegrationAsync(userId.Value, "Zoom", integ =>
+            {
+                integ.AccessToken = accessToken;
+                integ.ExpiresAt   = expiresAt;
+                integ.ConfigJson  = configJson;
+                if (email  != null) integ.Email = email;
+                if (zoomId != null) integ.Owner = zoomId;
+            });
+
             // Sync calendar immediately so meetings are ready on the integrations page
-            try { await _zoomSync.FetchAndSyncMeetingsAsync(userId!.Value); }
+            try { await _zoomSync.FetchAndSyncMeetingsAsync(userId.Value); }
             catch (Exception ex) { _logger.LogWarning(ex, "Initial Zoom sync failed — background will retry"); }
 
-            _logger.LogInformation("Zoom OAuth complete — user={UserId} email={Email}", userId, email);
+            _logger.LogInformation("Zoom OAuth complete — userId={UserId} email={Email}", userId, email);
         }
         catch (Exception ex)
         {

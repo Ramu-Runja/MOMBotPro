@@ -17,13 +17,14 @@ namespace MOMBotPro.API.Controllers;
 [Authorize]
 public class ZoomController : ControllerBase
 {
-    private readonly ZoomSessionRepository  _sessions;
-    private readonly RecallService          _recall;
-    private readonly PipelineRepository     _pipelines;
-    private readonly IServiceScopeFactory   _scopeFactory;
-    private readonly ZoomSyncService        _zoomSync;
-    private readonly ApplicationDbContext   _db;
-    private readonly IConfiguration         _config;
+    private readonly ZoomSessionRepository   _sessions;
+    private readonly RecallService           _recall;
+    private readonly PipelineRepository      _pipelines;
+    private readonly IServiceScopeFactory    _scopeFactory;
+    private readonly ZoomSyncService         _zoomSync;
+    private readonly ApplicationDbContext    _db;
+    private readonly IConfiguration          _config;
+    private readonly ZoomTokenService        _zoomTokenService;
     private readonly ILogger<ZoomController> _logger;
 
     public ZoomController(
@@ -34,16 +35,18 @@ public class ZoomController : ControllerBase
         ZoomSyncService          zoomSync,
         ApplicationDbContext     db,
         IConfiguration           config,
+        ZoomTokenService         zoomTokenService,
         ILogger<ZoomController>  logger)
     {
-        _sessions     = sessions;
-        _recall       = recall;
-        _pipelines    = pipelines;
-        _scopeFactory = scopeFactory;
-        _zoomSync     = zoomSync;
-        _db           = db;
-        _config       = config;
-        _logger       = logger;
+        _sessions         = sessions;
+        _recall           = recall;
+        _pipelines        = pipelines;
+        _scopeFactory     = scopeFactory;
+        _zoomSync         = zoomSync;
+        _db               = db;
+        _config           = config;
+        _zoomTokenService = zoomTokenService;
+        _logger           = logger;
     }
 
     // ── POST /api/zoom/join ──────────────────────────────────────────────
@@ -180,21 +183,25 @@ public class ZoomController : ControllerBase
 
         _logger.LogInformation("Fetching meetings for userId: {Id}", userId);
 
-        var meetings = await _db.ZoomMeetings
+        var rows = await _db.ZoomMeetings
             .Where(m => m.UserId == userId.Value || m.UserId == null)
             .OrderBy(m => m.StartTime)
-            .Select(m => new
-            {
-                m.Id,
-                m.ZoomMeetingId,
-                m.Topic,
-                m.StartTime,
-                m.Duration,
-                m.JoinUrl,
-                m.Status,
-                m.IsRecurring,
-            })
             .ToListAsync();
+
+        // EF Core reads DateTime from SQL Server with Kind=Unspecified.
+        // Explicitly mark as Utc so System.Text.Json serializes with "Z",
+        // which makes JavaScript parse it as UTC and display in local time.
+        var meetings = rows.Select(m => new
+        {
+            m.Id,
+            m.ZoomMeetingId,
+            m.Topic,
+            StartTime = DateTime.SpecifyKind(m.StartTime, DateTimeKind.Utc),
+            m.Duration,
+            m.JoinUrl,
+            m.Status,
+            m.IsRecurring,
+        }).ToList();
 
         _logger.LogInformation("Fetching meetings for userId={Id}, found={Count}", userId, meetings.Count);
         return Ok(meetings);
@@ -210,15 +217,19 @@ public class ZoomController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Topic))
             return BadRequest(new { error = "Topic is required." });
 
-        var integ = await _db.Integrations
-            .FirstOrDefaultAsync(i => i.UserId == userId.Value && i.Type == "Zoom" && i.IsConnected);
-
-        if (integ == null)
-            return BadRequest(new { error = "Zoom not connected. Connect Zoom first." });
+        string accessToken;
+        try
+        {
+            accessToken = await _zoomTokenService.GetValidAccessTokenAsync(userId.Value);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
 
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", integ.AccessToken);
+            new AuthenticationHeaderValue("Bearer", accessToken);
         http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
 
@@ -267,7 +278,7 @@ public class ZoomController : ControllerBase
         {
             id        = meeting.Id,
             topic     = meeting.Topic,
-            startTime = meeting.StartTime,
+            startTime = DateTime.SpecifyKind(meeting.StartTime, DateTimeKind.Utc),
             duration  = meeting.Duration,
             joinUrl   = meeting.JoinUrl,
             status    = meeting.Status,
@@ -282,27 +293,31 @@ public class ZoomController : ControllerBase
         var userId = GetUserId();
         if (userId == null) return Unauthorized();
 
-        var integ = await _db.Integrations
-            .FirstOrDefaultAsync(i => i.UserId == userId.Value && i.Type == "Zoom" && i.IsConnected);
-
-        if (integ == null)
-            return NotFound(new { error = "No Zoom integration found." });
+        string accessToken;
+        try
+        {
+            accessToken = await _zoomTokenService.GetValidAccessTokenAsync(userId.Value);
+        }
+        catch (Exception ex)
+        {
+            return NotFound(new { error = ex.Message });
+        }
 
         using var http = new HttpClient();
         http.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", integ.AccessToken);
+            new AuthenticationHeaderValue("Bearer", accessToken);
         http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/json"));
 
-        var res = await http.GetAsync("https://api.zoom.us/v2/users/me/meetings?type=scheduled&page_size=10");
+        var res  = await http.GetAsync("https://api.zoom.us/v2/users/me/meetings?type=scheduled&page_size=10");
         var body = await res.Content.ReadAsStringAsync();
 
         return Ok(new
         {
-            status   = (int)res.StatusCode,
-            tokenLen = integ.AccessToken?.Length ?? 0,
-            hasRefreshToken = !string.IsNullOrEmpty(integ.ConfigJson) && integ.ConfigJson.Contains("refresh_token"),
-            zoomResponse = body[..Math.Min(1000, body.Length)]
+            status          = (int)res.StatusCode,
+            tokenLen        = accessToken.Length,
+            hasRefreshToken = true,
+            zoomResponse    = body[..Math.Min(1000, body.Length)]
         });
     }
 
